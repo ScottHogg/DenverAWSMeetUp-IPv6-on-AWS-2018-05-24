@@ -1,0 +1,406 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Provides networking configuration for a standard, public facing application, separates private-public subnets and enforces traffic with NACL rules (qs-1nb14cqcl)'
+Metadata:
+    AWS::CloudFormation::Interface:
+        ParameterGroups:
+          - Label:
+                default: Region Config
+            Parameters:
+              - pRegionAZ1Name
+              - pRegionAZ2Name
+          - Label:
+                default: IPv6 Application VPC Config
+            Parameters:
+              - pApplicationVPCName
+              - pApplicationCIDR
+              - pDMZSubnetACIDR
+              - pDMZSubnetBCIDR
+              - pAppPrivateSubnetACIDR
+              - pAppPrivateSubnetBCIDR
+              - pDBPrivateSubnetACIDR
+              - pDBPrivateSubnetBCIDR
+              - pVPCTenancy
+          - Label:
+                default: AWS Quick Start Configuration
+        ParameterLabels:
+            pApplicationVPCName:
+                default: Name of Application VPC
+            pApplicationCIDR:
+                default: Application VPC CIDR block
+            pDMZSubnetACIDR:
+                default: CIDR block of DMZ A subnet (internet facing)
+            pDMZSubnetBCIDR:
+                default: CIDR block of DMZ B subnet (internet facing)
+            pAppPrivateSubnetACIDR:
+                default: CIDR block of Application B subnet (private)
+            pAppPrivateSubnetBCIDR:
+                default: CIDR block of Application A subnet (private)
+            pDBPrivateSubnetACIDR:
+                default: CIDR block of Database A subnet (private)
+            pDBPrivateSubnetBCIDR:
+                default: CIDR block of Database B subnet (private)
+            pVPCTenancy:
+                default: Instance tenancy
+    Stack:
+        Value: 2
+    VersionDate:
+        Value: 20160510
+    Identifier:
+        Value: template-vpc-v6application
+    Input:
+        Description: CIDR blocks, VPC names, KeyName, EC2 instance size
+    Output:
+        Description: Outputs ID of all deployed resources
+Conditions:
+    cNeedNatInstance: !Equals [ false, !Ref pSupportsNatGateway ]
+    cSupportsNatGateway: !Equals [ true, !Ref pSupportsNatGateway ]
+Parameters:
+    pRegionAZ1Name:
+        Description: Availability Zone 1 Name in Region
+        Type: AWS::EC2::AvailabilityZone::Name
+        Default: "us-west-2a"
+    pRegionAZ2Name:
+        Description: Availability Zone 2 Name in Region
+        Type: AWS::EC2::AvailabilityZone::Name
+        Default: "us-west-2b"
+    pApplicationVPCName:
+        Description: IPv6 Application VPC Name
+        Type: String
+        Default: v6Application
+    pApplicationCIDR:
+        Description: CIDR block for Application VPC
+        Type: String
+        Default: 10.200.0.0/16
+    pManagementCIDR:
+        Description: CIDR of Management VPC
+        Type: String
+        Default: 10.10.0.0/16
+    pDMZSubnetACIDR:
+        Description: CIDR block for DMZ AZ-1b subnet
+        Type: String
+        Default: 10.200.10.0/24
+    pDMZSubnetBCIDR:
+        Description: CIDR block for DMZ AZ-1b subnet
+        Type: String
+        Default: 10.200.20.0/24
+    pAppPrivateSubnetACIDR:
+        Description: CIDR block for Application AZ-1a subnet
+        Type: String
+        Default: 10.200.30.0/24
+    pAppPrivateSubnetBCIDR:
+        Description: CIDR block for Application AZ-1b subnet
+        Type: String
+        Default: 10.200.40.0/24
+    pDBPrivateSubnetACIDR:
+        Description: CIDR block for Private AZ-1a subnet
+        Type: String
+        Default: 10.200.50.0/24
+    pDBPrivateSubnetBCIDR:
+        Description: CIDR block for Private AZ-1b subnet
+        Type: String
+        Default: 10.200.60.0/24
+    pVPCTenancy:
+        Description: Instance tenancy behavior for this VPC
+        Type: String
+        Default: default
+        AllowedValues:
+          - default
+    pEnvironment:
+        Description: Environment (development, test, or application)
+        Type: String
+        Default: development
+    pSupportsNatGateway:
+        Description: Specifies whether this region supports NAT Gateway (this value is determined by the main stack if it is invoked from there)
+        Type: String
+        Default: true
+Resources:
+    rVPCApplication:
+        Type: AWS::EC2::VPC
+        Properties:
+            CidrBlock: !Ref pApplicationCIDR
+            EnableDnsSupport: true
+            EnableDnsHostnames: true
+            Tags:
+              - Key: Name
+                Value: !Ref pApplicationVPCName
+    MyVPCv6: #Request an IPv6 block for the VPC - This Works!
+        Type: "AWS::EC2::VPCCidrBlock"
+        Properties:
+            AmazonProvidedIpv6CidrBlock: true
+            VpcId: !Ref rVPCApplication
+    rDMZSubnetA:
+        Type: AWS::EC2::Subnet
+        DependsOn: MyVPCv6
+        Properties:
+            CidrBlock: !Ref pDMZSubnetACIDR
+            AvailabilityZone: !Ref pRegionAZ1Name
+            VpcId: !Ref rVPCApplication
+            #MapPublicIpOnLaunch: false    # Both AssignIpv6AddressOnCreation and MapPublicIpOnLaunch cannot be specified
+            #Ipv6CidrBlock: "2600:1f14:b39:d101::/64"   #Manually assign IPv6 /64 to subnet - This Works!
+            #Ipv6CidrBlock: !Select [1, !Cidr [!Select [0, !GetAtt 'rVPCApplication.Ipv6CidrBlocks'], 256, 64]]    # Works !
+            Ipv6CidrBlock:    # Works !
+                Fn::Sub:
+                    - "${VpcPart}${SubnetPart}"
+                    - SubnetPart: 01::/64
+                      VpcPart: !Select [0, !Split ['00::/56', !Select [0,!GetAtt rVPCApplication.Ipv6CidrBlocks]]]
+            AssignIpv6AddressOnCreation: true
+            Tags:
+              - Key: Name
+                Value: Application DMZ Subnet A
+    rDMZSubnetB:
+        Type: AWS::EC2::Subnet
+        DependsOn: MyVPCv6
+        Properties:
+            CidrBlock: !Ref pDMZSubnetBCIDR
+            AvailabilityZone: !Ref pRegionAZ2Name
+            VpcId: !Ref rVPCApplication
+            #MapPublicIpOnLaunch: false    # Both AssignIpv6AddressOnCreation and MapPublicIpOnLaunch cannot be specified
+            #Ipv6CidrBlock: "2600:1f14:b39:d102::/64"   #Manually assign IPv6 /64 to subnet - This Works!
+            #Ipv6CidrBlock: !Select [2, !Cidr [!Select [0, !GetAtt 'rVPCApplication.Ipv6CidrBlocks'], 256, 64]]    # Works !
+            Ipv6CidrBlock:    # Works !
+                Fn::Sub:
+                    - "${VpcPart}${SubnetPart}"
+                    - SubnetPart: 02::/64
+                      VpcPart: !Select [0, !Split ['00::/56', !Select [0,!GetAtt rVPCApplication.Ipv6CidrBlocks]]]
+            AssignIpv6AddressOnCreation: true
+            Tags:
+              - Key: Name
+                Value: Application DMZ Subnet B
+    rAppPrivateSubnetA:
+        Type: AWS::EC2::Subnet
+        DependsOn: MyVPCv6
+        Properties:
+            CidrBlock: !Ref pAppPrivateSubnetACIDR
+            AvailabilityZone: !Ref pRegionAZ1Name
+            VpcId: !Ref rVPCApplication
+            #MapPublicIpOnLaunch: false    # Both AssignIpv6AddressOnCreation and MapPublicIpOnLaunch cannot be specified
+            #Ipv6CidrBlock: "2600:1f14:b39:d103::/64"   #Manually assign IPv6 /64 to subnet - This Works!
+            #Ipv6CidrBlock: !Select [3, !Cidr [!Select [0, !GetAtt 'rVPCApplication.Ipv6CidrBlocks'], 256, 64]]    # Works !
+            Ipv6CidrBlock:    # Works !
+                Fn::Sub:
+                    - "${VpcPart}${SubnetPart}"
+                    - SubnetPart: 03::/64
+                      VpcPart: !Select [0, !Split ['00::/56', !Select [0,!GetAtt rVPCApplication.Ipv6CidrBlocks]]]
+            AssignIpv6AddressOnCreation: true
+            Tags:
+              - Key: Name
+                Value: Application App Subnet A
+    rAppPrivateSubnetB:
+        Type: AWS::EC2::Subnet
+        DependsOn: MyVPCv6
+        Properties:
+            CidrBlock: !Ref pAppPrivateSubnetBCIDR
+            AvailabilityZone: !Ref pRegionAZ2Name
+            VpcId: !Ref rVPCApplication
+            #MapPublicIpOnLaunch: false    # Both AssignIpv6AddressOnCreation and MapPublicIpOnLaunch cannot be specified
+            #Ipv6CidrBlock: "2600:1f14:b39:d104::/64"   #Manually assign IPv6 /64 to subnet - This Works!
+            #Ipv6CidrBlock: !Select [4, !Cidr [!Select [0, !GetAtt 'rVPCApplication.Ipv6CidrBlocks'], 256, 64]]    # Works !
+            Ipv6CidrBlock:    # Works !
+                Fn::Sub:
+                    - "${VpcPart}${SubnetPart}"
+                    - SubnetPart: 04::/64
+                      VpcPart: !Select [0, !Split ['00::/56', !Select [0,!GetAtt rVPCApplication.Ipv6CidrBlocks]]]
+            AssignIpv6AddressOnCreation: true
+            Tags:
+              - Key: Name
+                Value: Application App Subnet B
+    rDBPrivateSubnetA:
+        Type: AWS::EC2::Subnet
+        DependsOn: MyVPCv6
+        Properties:
+            CidrBlock: !Ref pDBPrivateSubnetACIDR
+            AvailabilityZone: !Ref pRegionAZ1Name
+            VpcId: !Ref rVPCApplication
+            #MapPublicIpOnLaunch: false    # Both AssignIpv6AddressOnCreation and MapPublicIpOnLaunch cannot be specified
+            #Ipv6CidrBlock: "2600:1f14:b39:d105::/64"   #Manually assign IPv6 /64 to subnet - This Works!
+            #Ipv6CidrBlock: !Select [5, !Cidr [!Select [0, !GetAtt 'rVPCApplication.Ipv6CidrBlocks'], 256, 64]]    # Works !
+            Ipv6CidrBlock:    # Works !
+                Fn::Sub:
+                    - "${VpcPart}${SubnetPart}"
+                    - SubnetPart: 05::/64
+                      VpcPart: !Select [0, !Split ['00::/56', !Select [0,!GetAtt rVPCApplication.Ipv6CidrBlocks]]]
+            AssignIpv6AddressOnCreation: true
+            Tags:
+              - Key: Name
+                Value: Application DB Subnet A
+    rDBPrivateSubnetB:
+        Type: AWS::EC2::Subnet
+        DependsOn: MyVPCv6
+        Properties:
+            CidrBlock: !Ref pDBPrivateSubnetBCIDR
+            AvailabilityZone: !Ref pRegionAZ2Name
+            VpcId: !Ref rVPCApplication
+            #MapPublicIpOnLaunch: false    # Both AssignIpv6AddressOnCreation and MapPublicIpOnLaunch cannot be specified
+            #Ipv6CidrBlock: "2600:1f14:b39:d106::/64"   #Manually assign IPv6 /64 to subnet - This Works!
+            #Ipv6CidrBlock: !Select [6, !Cidr [!Select [0, !GetAtt 'rVPCApplication.Ipv6CidrBlocks'], 256, 64]]    # Works !
+            Ipv6CidrBlock:    # Works !
+                Fn::Sub:
+                    - "${VpcPart}${SubnetPart}"
+                    - SubnetPart: 06::/64
+                      VpcPart: !Select [0, !Split ['00::/56', !Select [0,!GetAtt rVPCApplication.Ipv6CidrBlocks]]]
+            AssignIpv6AddressOnCreation: true
+            Tags:
+              - Key: Name
+                Value: Application DB Subnet B
+    rIGWApp:
+        Type: AWS::EC2::InternetGateway
+        Properties:
+            Tags:
+              - Key: Name
+                Value: igw-application
+              - Key: Environment
+                Value: !Ref pEnvironment
+    rRouteTableMain:
+        Type: AWS::EC2::RouteTable
+        Properties:
+            VpcId: !Ref rVPCApplication
+            Tags:
+              - Key: Name
+                Value: Application DMZ Route
+    rEIPAppNatA:
+        Type: AWS::EC2::EIP
+        Properties:
+            Domain: vpc
+    rNATGatewaySubnetA:
+        Type: AWS::EC2::NatGateway
+        DependsOn: rIGWApp
+        Condition: cSupportsNatGateway
+        Properties:
+            AllocationId: !GetAtt rEIPAppNatA.AllocationId
+            SubnetId: !Ref rDMZSubnetA
+    rEIPAppNatB:
+        Type: AWS::EC2::EIP
+        Properties:
+            Domain: vpc
+    rNATGatewaySubnetB:
+        Type: AWS::EC2::NatGateway
+        DependsOn: rIGWApp
+        Condition: cSupportsNatGateway
+        Properties:
+            AllocationId: !GetAtt rEIPAppNatB.AllocationId
+            SubnetId: !Ref rDMZSubnetB
+    v6EOIGW:              # Works !
+        Type: "AWS::EC2::EgressOnlyInternetGateway"
+        Properties: 
+            VpcId: !Ref rVPCApplication
+    rRouteAppIGW:
+        Type: AWS::EC2::Route
+        DependsOn: rGWAttachmentAppIGW
+        Properties:
+            RouteTableId: !Ref rRouteTableMain
+            GatewayId: !Ref rIGWApp
+            DestinationCidrBlock: 0.0.0.0/0
+    rv6RouteAppEOIGW:              # Works !
+        Type: "AWS::EC2::Route"
+        Properties:
+            DestinationIpv6CidrBlock: "::/0"
+            GatewayId: !Ref rIGWApp
+            #EgressOnlyInternetGatewayId: !Ref v6EOIGW      # DMZ route table default points to IGW (not EOIGW)
+            RouteTableId: !Ref rRouteTableMain
+    rRouteAppPrivateNatGatewayA:
+        Type: AWS::EC2::Route
+        Condition: cSupportsNatGateway
+        Properties:
+            DestinationCidrBlock: 0.0.0.0/0
+            RouteTableId: !Ref rRouteTableAppPrivateA
+            NatGatewayId: !Ref rNATGatewaySubnetA
+    rRouteAppPrivateNatGatewayB:
+        Type: AWS::EC2::Route
+        Condition: cSupportsNatGateway
+        Properties:
+            DestinationCidrBlock: 0.0.0.0/0
+            RouteTableId: !Ref rRouteTableAppPrivateB
+            NatGatewayId: !Ref rNATGatewaySubnetB
+    rRouteAssocAppDMZA:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            RouteTableId: !Ref rRouteTableMain
+            SubnetId: !Ref rDMZSubnetA
+    rRouteAssocAppDMZB:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            RouteTableId: !Ref rRouteTableMain
+            SubnetId: !Ref rDMZSubnetB
+    rAppPrivateSubnetAssociationA:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            RouteTableId: !Ref rRouteTableAppPrivateA
+            SubnetId: !Ref rAppPrivateSubnetA
+    rAppPrivateSubnetAssociationB:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            RouteTableId: !Ref rRouteTableAppPrivateB
+            SubnetId: !Ref rAppPrivateSubnetB
+    rRouteAssocDBPrivateA:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            RouteTableId: !Ref rRouteTableAppPrivateA
+            SubnetId: !Ref rDBPrivateSubnetA
+    rRouteAssocDBPrivateB:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            RouteTableId: !Ref rRouteTableAppPrivateB
+            SubnetId: !Ref rDBPrivateSubnetB
+    rRouteTableAppPrivateA:
+        Type: AWS::EC2::RouteTable
+        Properties:
+            VpcId: !Ref rVPCApplication
+            Tags:
+              - Key: Name
+                Value: Application Private Route A
+    rv6RouteAppPrivateAEOIGW:              # Works !
+        Type: "AWS::EC2::Route"
+        Properties:
+            DestinationIpv6CidrBlock: "::/0"
+            EgressOnlyInternetGatewayId: !Ref v6EOIGW
+            RouteTableId: !Ref rRouteTableAppPrivateA
+    rRouteTableAppPrivateB:
+        Type: AWS::EC2::RouteTable
+        Properties:
+            VpcId: !Ref rVPCApplication
+            Tags:
+              - Key: Name
+                Value: Application Private Route B
+    rv6RouteAppPrivateBEOIGW:              # Works !
+        Type: "AWS::EC2::Route"
+        Properties:
+            DestinationIpv6CidrBlock: "::/0"
+            EgressOnlyInternetGatewayId: !Ref v6EOIGW
+            RouteTableId: !Ref rRouteTableAppPrivateB
+    rGWAttachmentAppIGW:
+        Type: AWS::EC2::VPCGatewayAttachment
+        DependsOn: rIGWApp
+        Properties:
+            VpcId: !Ref rVPCApplication
+            InternetGatewayId: !Ref rIGWApp
+Outputs:
+    rVPCApplication:
+        Value: !Ref rVPCApplication
+#    PrimaryCidrBlock:
+#        Value: !GetAtt rVPCApplication.CidrBlock
+#    Ipv6CidrBlock:
+#        Value: !Select [ 0, !GetAtt rVPCApplication.Ipv6CidrBlocks ]
+#    CidrBlockAssociation:
+#        Value: !Select [ 0, !GetAtt rVPCApplication.CidrBlockAssociations ]
+    rDMZSubnetA:
+        Value: !Ref rDMZSubnetA
+#    rDMZSubnetAv6:
+#        Value: !Ref rDMZSubnetA.Ipv6CidrBlock
+#        Value: !GetAtt rDMZSubnetA.Ipv6CidrBlock
+#        Value: !Select [ 0, !GetAtt rDMZSubnetA.CidrBlock ]
+    rDMZSubnetB:
+        Value: !Ref rDMZSubnetB
+    rRouteTableAppPrivate:
+        Value: !Ref rRouteTableAppPrivateA
+    rRouteTableAppPrivateB:
+        Value: !Ref rRouteTableAppPrivateB
+    rRouteTableAppPublic:
+        Value: !Ref rRouteTableMain
+    rAppPrivateSubnetA:
+        Value: !Ref rAppPrivateSubnetA
+    rAppPrivateSubnetB:
+        Value: !Ref rAppPrivateSubnetB
+    rDBPrivateSubnetA:
+        Value: !Ref rDBPrivateSubnetA
+    rDBPrivateSubnetB:
+        Value: !Ref rDBPrivateSubnetB
